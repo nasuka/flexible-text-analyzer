@@ -353,7 +353,7 @@ def main():
                 "バッチサイズ",
                 min_value=5,
                 max_value=50,
-                value=25,
+                value=10,
                 step=5,
                 help="一度に処理するテキスト数（小さいほど安定、大きいほど高速）",
             )
@@ -362,8 +362,8 @@ def main():
             max_workers = st.slider(
                 "並列処理数",
                 min_value=1,
-                max_value=5,
-                value=3,
+                max_value=20,
+                value=10,
                 help="同時に実行するバッチ数（多すぎるとAPI制限に注意）",
             )
 

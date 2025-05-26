@@ -1,16 +1,13 @@
 """LLMトピック抽出サービス"""
 
-import openai
-import streamlit as st
-
 from schema.topic import SentimentAnalysis, TopicAnalysisResult
+from services.llm import LLMClient
 
 
 class LLMTopicExtractor:
     def __init__(self, api_key: str, model: str = "gpt-4o"):
-        """OpenAI APIを使用したトピック抽出のStructured Output対応"""
-        self.client = openai.OpenAI(api_key=api_key)
-        self.model = model
+        """共通LLMクライアントを使用したトピック抽出のStructured Output対応"""
+        self.llm_client = LLMClient(api_key=api_key, model=model)
 
     def extract_topics(
         self,
@@ -49,25 +46,14 @@ class LLMTopicExtractor:
 7. 全体の要約も含めてください
 """
 
-        try:
-            response = self.client.beta.chat.completions.parse(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "あなたはテキスト分析の専門家です。与えられたテキストから包括的で正確なトピック分析を行ってください。",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                response_format=TopicAnalysisResult,
-                temperature=0.3,
-            )
+        system_message = "あなたはテキスト分析の専門家です。与えられたテキストから包括的で正確なトピック分析を行ってください。"
 
-            return response.choices[0].message.parsed
-
-        except Exception as e:
-            st.error(f"トピック抽出でエラーが発生しました: {str(e)}")
-            return None
+        return self.llm_client.structured_completion(
+            prompt=prompt,
+            response_format=TopicAnalysisResult,
+            system_message=system_message,
+            temperature=0.3,
+        )
 
     def analyze_sentiment(self, texts: list[str]) -> SentimentAnalysis | None:
         """感情分析を実行する"""
@@ -87,22 +73,13 @@ class LLMTopicExtractor:
 4. 日本語で回答してください
 """
 
-        try:
-            response = self.client.beta.chat.completions.parse(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "あなたは感情分析の専門家です。テキストの感情を分析してください。",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                response_format=SentimentAnalysis,
-                temperature=0.3,
-            )
+        system_message = (
+            "あなたは感情分析の専門家です。テキストの感情を分析してください。"
+        )
 
-            return response.choices[0].message.parsed
-
-        except Exception as e:
-            st.error(f"感情分析でエラーが発生しました: {str(e)}")
-            return None
+        return self.llm_client.structured_completion(
+            prompt=prompt,
+            response_format=SentimentAnalysis,
+            system_message=system_message,
+            temperature=0.3,
+        )

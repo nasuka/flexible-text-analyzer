@@ -1,14 +1,12 @@
 """LLMトピック分類サービス"""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import functools
 from typing import Any
 
-import openai
 import streamlit as st
 
 from schema.classification import ClassificationResult
-
+from services.llm import LLMClient
 
 
 class LLMTopicClassifier:
@@ -19,9 +17,8 @@ class LLMTopicClassifier:
         batch_size: int = 25,
         max_workers: int = 3,
     ):
-        """OpenAI APIを使用してトピック分類のStructured Outputを取得"""
-        self.client = openai.OpenAI(api_key=api_key)
-        self.model = model
+        """共通LLMクライアントを使用してトピック分類のStructured Outputを取得"""
+        self.llm_client = LLMClient(api_key=api_key, model=model)
         self.batch_size = batch_size
         self.max_workers = max_workers
 
@@ -46,7 +43,6 @@ class LLMTopicClassifier:
 
         return "\n\n".join(topic_info)
 
-    @functools.lru_cache(maxsize=1000)
     def _classify_batch(
         self, batch_texts: list[str], batch_start_index: int, topic_definitions: str
     ) -> ClassificationResult | None:
@@ -75,22 +71,16 @@ class LLMTopicClassifier:
 重要: 必ず{len(batch_texts)}件全ての分類結果を返してください。
 """
 
+        system_message = "あなたはテキストをトピックに分類する専門家です。与えられた全てのテキストを必ず分類してください。分類結果の数は入力テキスト数と完全に一致する必要があります。"
+
+        result = self.llm_client.structured_completion(
+            prompt=prompt,
+            response_format=ClassificationResult,
+            system_message=system_message,
+            temperature=0.1,
+        )
+
         try:
-            response = self.client.beta.chat.completions.parse(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "あなたはテキストをトピックに分類する専門家です。与えられた全てのテキストを必ず分類してください。分類結果の数は入力テキスト数と完全に一致する必要があります。",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                response_format=ClassificationResult,
-                temperature=0.1,
-            )
-
-            result = response.choices[0].message.parsed
-
             # 結果の検証
             if result and result.classifications:
                 # 分類結果の数をチェック
