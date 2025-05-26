@@ -1,8 +1,9 @@
-.PHONY: help up down build logs lint format check
+.PHONY: help up up-dev down build logs lint format check
 
 help:
 	@echo "Available commands:"
-	@echo "  up      - Start the Docker containers"
+	@echo "  up      - Start the Docker containers (production)"
+	@echo "  up-dev  - Start the Docker containers (development with hot reload)"
 	@echo "  down    - Stop the Docker containers"
 	@echo "  build   - Build the Docker image"
 	@echo "  logs    - Show container logs"
@@ -13,8 +14,12 @@ help:
 up:
 	docker-compose up --build
 
+up-dev:
+	docker-compose -f docker-compose.dev.yml up --build
+
 down:
 	docker-compose down
+	docker-compose -f docker-compose.dev.yml down
 
 build:
 	docker-compose build

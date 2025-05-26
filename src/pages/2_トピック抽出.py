@@ -1,13 +1,10 @@
-import pandas as pd
-import streamlit as st
-import openai
 import json
-import time
-from typing import List, Dict, Any, Optional
-import plotly.express as px
-import plotly.graph_objects as go
-from collections import Counter
 import os
+
+import openai
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
 from pydantic import BaseModel
 
 
@@ -17,7 +14,7 @@ class SubTopic(BaseModel):
     id: int
     name: str
     description: str
-    keywords: List[str]
+    keywords: list[str]
 
 
 class Topic(BaseModel):
@@ -26,14 +23,14 @@ class Topic(BaseModel):
     id: int
     name: str
     description: str
-    keywords: List[str]
-    subtopics: List[SubTopic]
+    keywords: list[str]
+    subtopics: list[SubTopic]
 
 
 class TopicAnalysisResult(BaseModel):
     """トピック分析結果のデータモデル"""
 
-    topics: List[Topic]
+    topics: list[Topic]
     summary: str
 
 
@@ -44,7 +41,7 @@ class SentimentAnalysis(BaseModel):
     positive_ratio: float
     negative_ratio: float
     neutral_ratio: float
-    key_insights: List[str]
+    key_insights: list[str]
 
 
 class LLMTopicExtractor:
@@ -54,26 +51,40 @@ class LLMTopicExtractor:
         self.model = model
 
     def extract_topics(
-        self, texts: List[str], n_topics: int = 5, n_subtopics: int = 3
-    ) -> Optional[TopicAnalysisResult]:
+        self,
+        texts: list[str],
+        n_topics: int | None = None,
+        n_subtopics: int | None = None,
+    ) -> TopicAnalysisResult | None:
         """LLMを使用してトピックとサブトピックを抽出する"""
 
         # テキストの結合
         combined_text = "\n".join([f"{i + 1}. {text}" for i, text in enumerate(texts)])
 
+        # トピック数とサブトピック数の指定
+        topic_instruction = (
+            "適切な数のトピック" if n_topics is None else f"最大{n_topics}個のトピック"
+        )
+        subtopic_instruction = (
+            "適切な数のサブトピック"
+            if n_subtopics is None
+            else f"各トピックにつき最大{n_subtopics}個のサブトピック"
+        )
+
         prompt = f"""
-以下のテキストから最大{n_topics}個のトピックと、各トピックにつき最大{n_subtopics}個のサブトピックを抽出してください。
+以下のテキストから{topic_instruction}と、{subtopic_instruction}を抽出してください。
 
 テキスト数: {len(texts)}個:
 {combined_text}
 
-指示::
-1. テキストを分析してトピックを抽出してください
-2. サブトピックを適切に分類してください
-3. サブトピックは具体的な内容を含めてください
-4. キーワードは関連性の高いものを選んでください
-5. 日本語で回答してください
-6. 構造化された形式で出力してください
+指示:
+1. テキストの内容を詳細に分析して、自然で意味のあるトピックを抽出してください
+2. トピック数は内容に応じて最適な数を自動判定してください（指定がない場合）
+3. サブトピックは主トピックの具体的な側面や詳細を表現してください
+4. サブトピック数も内容に応じて最適な数を自動判定してください（指定がない場合）
+5. キーワードは実際にテキストに出現する重要な単語を選択してください
+6. 日本語で自然な表現を使用してください
+7. 全体の要約も含めてください
 """
 
         try:
@@ -96,7 +107,7 @@ class LLMTopicExtractor:
             st.error(f"トピック抽出でエラーが発生しました: {str(e)}")
             return None
 
-    def analyze_sentiment(self, texts: List[str]) -> Optional[SentimentAnalysis]:
+    def analyze_sentiment(self, texts: list[str]) -> SentimentAnalysis | None:
         """感情分析を実行する"""
 
         combined_text = "\n".join([f"{i + 1}. {text}" for i, text in enumerate(texts)])
@@ -135,46 +146,6 @@ class LLMTopicExtractor:
             return None
 
 
-def create_topic_visualization(result: TopicAnalysisResult) -> go.Figure:
-    """トピックの可視化"""
-    if not result or not result.topics:
-        return None
-
-    # トピックごとのデータを準備
-    topic_names = [f"トピック{t.id}: {t.name}" for t in result.topics]
-    keyword_counts = [len(t.keywords) for t in result.topics]
-    subtopic_counts = [len(t.subtopics) for t in result.topics]
-
-    fig = go.Figure(
-        data=[
-            go.Bar(
-                name="キーワード数",
-                x=topic_names,
-                y=keyword_counts,
-                yaxis="y",
-                offsetgroup=1,
-            ),
-            go.Bar(
-                name="サブトピック数",
-                x=topic_names,
-                y=subtopic_counts,
-                yaxis="y2",
-                offsetgroup=2,
-            ),
-        ]
-    )
-
-    fig.update_layout(
-        title="トピック分析",
-        xaxis_title="トピック",
-        yaxis={"title": "キーワード数", "side": "left"},
-        yaxis2={"title": "サブトピック数", "side": "right", "overlaying": "y"},
-        barmode="group",
-        height=500,
-    )
-
-    return fig
-
 
 def create_sentiment_chart(sentiment: SentimentAnalysis) -> go.Figure:
     """感情分析の可視化"""
@@ -205,104 +176,6 @@ def create_sentiment_chart(sentiment: SentimentAnalysis) -> go.Figure:
 
     return fig
 
-
-def create_topic_network(result: TopicAnalysisResult) -> go.Figure:
-    """トピックとサブトピックのネットワーク"""
-    if not result or not result.topics:
-        return None
-
-    try:
-        import networkx as nx
-    except ImportError:
-        st.warning("NetworkXがインストールされていません。インストールしてください。")
-        return None
-
-    G = nx.Graph()
-
-    # ノードの追加
-    for topic in result.topics:
-        G.add_node(f"T{topic.id}", label=topic.name, type="topic", size=20)
-        for subtopic in topic.subtopics:
-            G.add_node(
-                f"T{topic.id}S{subtopic.id}",
-                label=subtopic.name,
-                type="subtopic",
-                size=10,
-            )
-            G.add_edge(f"T{topic.id}", f"T{topic.id}S{subtopic.id}")
-
-    # レイアウトの計算
-    pos = nx.spring_layout(G, k=2, iterations=50)
-
-    # エッジの描画
-    edge_x = []
-    edge_y = []
-    for edge in G.edges():
-        x0, y0 = pos[edge[0]]
-        x1, y1 = pos[edge[1]]
-        edge_x.extend([x0, x1, None])
-        edge_y.extend([y0, y1, None])
-
-    edge_trace = go.Scatter(
-        x=edge_x,
-        y=edge_y,
-        line={"width": 1, "color": "#888"},
-        hoverinfo="none",
-        mode="lines",
-    )
-
-    # ノードの描画
-    node_x = []
-    node_y = []
-    node_text = []
-    node_color = []
-    node_size = []
-
-    for node in G.nodes():
-        x, y = pos[node]
-        node_x.append(x)
-        node_y.append(y)
-        node_text.append(G.nodes[node]["label"])
-        node_color.append("red" if G.nodes[node]["type"] == "topic" else "blue")
-        node_size.append(G.nodes[node]["size"])
-
-    node_trace = go.Scatter(
-        x=node_x,
-        y=node_y,
-        mode="markers+text",
-        hoverinfo="text",
-        text=node_text,
-        textposition="middle center",
-        marker={
-            "size": node_size, 
-            "color": node_color, 
-            "line": {"width": 2, "color": "white"}
-        },
-    )
-
-    fig = go.Figure(
-        data=[edge_trace, node_trace],
-        layout={
-            "title": "トピックマップ",
-            "showlegend": False,
-            "hovermode": "closest",
-            "margin": {"b": 20, "l": 5, "r": 5, "t": 40},
-            "annotations": [
-                {
-                    "text": "赤: トピック, 青: サブトピック",
-                    "showarrow": False,
-                    "xref": "paper",
-                    "yref": "paper",
-                    "x": 0.005,
-                    "y": -0.002,
-                }
-            ],
-            "xaxis": {"showgrid": False, "zeroline": False, "showticklabels": False},
-            "yaxis": {"showgrid": False, "zeroline": False, "showticklabels": False},
-        },
-    )
-
-    return fig
 
 
 def main():
@@ -357,12 +230,21 @@ def main():
                 # パラメータ設定
                 col1, col2 = st.columns(2)
                 with col1:
-                    n_topics = st.slider(
-                        "トピック数", min_value=2, max_value=10, value=5
-                    )
-                    n_subtopics = st.slider(
-                        "サブトピック数", min_value=1, max_value=5, value=3
-                    )
+                    auto_topics = st.checkbox("トピック数を自動決定", value=True)
+                    if not auto_topics:
+                        n_topics = st.slider(
+                            "トピック数", min_value=2, max_value=10, value=5
+                        )
+                    else:
+                        n_topics = None
+
+                    auto_subtopics = st.checkbox("サブトピック数を自動決定", value=True)
+                    if not auto_subtopics:
+                        n_subtopics = st.slider(
+                            "サブトピック数", min_value=1, max_value=5, value=3
+                        )
+                    else:
+                        n_subtopics = None
 
                 with col2:
                     include_sentiment = st.checkbox("感情分析を含める", value=True)
@@ -370,7 +252,7 @@ def main():
                         "データ件数",
                         min_value=10,
                         max_value=len(df),
-                        value=min(100, len(df)),
+                        value=len(df),
                     )
 
                 # テキストデータ抽出
@@ -404,6 +286,17 @@ def main():
                             progress_bar.progress(50)
 
                             if topics_result:
+                                # セッション状態に結果を保存
+                                st.session_state["topics_result"] = topics_result
+                                st.session_state["analysis_settings"] = {
+                                    "model": model,
+                                    "n_topics": n_topics if n_topics else "自動決定",
+                                    "n_subtopics": n_subtopics
+                                    if n_subtopics
+                                    else "自動決定",
+                                    "data_count": len(filtered_texts),
+                                    "text_column": text_column,
+                                }
                                 st.success("トピック抽出完了")
 
                                 # レポート
@@ -438,19 +331,6 @@ def main():
                                 # 可視化
                                 st.subheader("可視化")
 
-                                # トピックグラフ
-                                fig_topics = create_topic_visualization(topics_result)
-                                if fig_topics:
-                                    st.plotly_chart(
-                                        fig_topics, use_container_width=True
-                                    )
-
-                                # トピックネットワーク
-                                fig_network = create_topic_network(topics_result)
-                                if fig_network:
-                                    st.plotly_chart(
-                                        fig_network, use_container_width=True
-                                    )
 
                                 # 感情分析
                                 if include_sentiment:
@@ -461,6 +341,11 @@ def main():
                                     progress_bar.progress(100)
 
                                     if sentiment_result:
+                                        # セッション状態に感情分析結果も保存
+                                        st.session_state["sentiment_result"] = (
+                                            sentiment_result
+                                        )
+
                                         st.subheader("感情分析レポート")
 
                                         col1, col2 = st.columns(2)
@@ -493,73 +378,68 @@ def main():
                                         for insight in sentiment_result.key_insights:
                                             st.write(f"• {insight}")
 
-                                # レポート出力
-                                st.subheader("レポート出力")
+                                progress_bar.empty()
 
-                                # 構造化JSON出力
-                                download_data = {
-                                    "analysis_settings": {
-                                        "model": model,
-                                        "n_topics": n_topics,
-                                        "n_subtopics": n_subtopics,
-                                        "data_count": len(filtered_texts),
-                                        "text_column": text_column,
-                                    },
-                                    "topics": topics_result.dict(),
-                                    "sentiment": sentiment_result.dict()
-                                    if include_sentiment and sentiment_result
-                                    else None,
+                # セッション状態から結果を表示（ダウンロード後もセッションがリセットされない）
+                if "topics_result" in st.session_state:
+                    topics_result = st.session_state["topics_result"]
+                    analysis_settings = st.session_state.get("analysis_settings", {})
+                    sentiment_result = st.session_state.get("sentiment_result", None)
+
+                    # レポート出力
+                    st.subheader("レポート出力")
+
+                    # 構造化JSON出力
+                    download_data = {
+                        "analysis_settings": analysis_settings,
+                        "topics": topics_result.dict(),
+                        "sentiment": sentiment_result.dict()
+                        if sentiment_result
+                        else None,
+                    }
+
+                    json_str = json.dumps(download_data, ensure_ascii=False, indent=2)
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.download_button(
+                            label="分析レポート (JSON)",
+                            data=json_str,
+                            file_name="structured_topic_analysis.json",
+                            mime="application/json",
+                            key="download_json",
+                        )
+
+                    with col2:
+                        # CSV形式トピック一覧
+                        csv_data = []
+                        for topic in topics_result.topics:
+                            csv_data.append(
+                                {
+                                    "トピックID": topic.id,
+                                    "トピック名": topic.name,
+                                    "説明": topic.description,
+                                    "キーワード": ", ".join(topic.keywords),
+                                    "サブトピック数": len(topic.subtopics),
+                                    "サブトピック一覧": "; ".join(
+                                        [subtopic.name for subtopic in topic.subtopics]
+                                    ),
                                 }
+                            )
 
-                                json_str = json.dumps(
-                                    download_data, ensure_ascii=False, indent=2
-                                )
+                        csv_df = pd.DataFrame(csv_data)
+                        csv_str = csv_df.to_csv(index=False, encoding="utf-8-sig")
 
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.download_button(
-                                        label="分析レポート (JSON)",
-                                        data=json_str,
-                                        file_name="structured_topic_analysis.json",
-                                        mime="application/json",
-                                    )
+                        st.download_button(
+                            label="トピック一覧 (CSV)",
+                            data=csv_str,
+                            file_name="topic_summary.csv",
+                            mime="text/csv",
+                            key="download_csv",
+                        )
 
-                                with col2:
-                                    # CSV形式トピック一覧
-                                    csv_data = []
-                                    for topic in topics_result.topics:
-                                        csv_data.append(
-                                            {
-                                                "トピックID": topic.id,
-                                                "トピック名": topic.name,
-                                                "説明": topic.description,
-                                                "キーワード": ", ".join(topic.keywords),
-                                                "サブトピック数": len(topic.subtopics),
-                                                "サブトピック一覧": "; ".join(
-                                                    [st.name for st in topic.subtopics]
-                                                ),
-                                            }
-                                        )
-
-                                    csv_df = pd.DataFrame(csv_data)
-                                    csv_str = csv_df.to_csv(
-                                        index=False, encoding="utf-8-sig"
-                                    )
-
-                                    st.download_button(
-                                        label="トピック一覧 (CSV)",
-                                        data=csv_str,
-                                        file_name="topic_summary.csv",
-                                        mime="text/csv",
-                                    )
-
-                                progress_bar.empty()
-
-                            else:
-                                st.error(
-                                    "トピック抽出に失敗しました。APIキーを確認してください"
-                                )
-                                progress_bar.empty()
+                else:
+                    st.error("トピック抽出に失敗しました。APIキーを確認してください")
 
         except Exception as e:
             st.error(f"ファイルの読み込みに失敗しました: {str(e)}")
@@ -577,13 +457,13 @@ def main():
             4. **テキスト列**を選択
             5. **パラメータ**を設定
             6. **LLMトピック抽出実行**をクリック
-            
+
             ### Structured Outputの特徴
             - **高精度**: 構造化された出力で分析
             - **詳細な分析**: トピックとサブトピックの階層構造
             - **効率的**: 自動的にデータを整理
             - **高速処理**: バッチ処理による効率化
-            
+
             ### サンプルCSV形式
             ```csv
             id,comment,author,date
@@ -591,13 +471,13 @@ def main():
             2,改善が必要な点があります,ユーザー2,2024-01-02
             3,期待以上の品質です,ユーザー3,2024-01-03
             ```
-            
+
             ### 注意事項
             - **API制限**: 大量のデータを分析する場合は注意
             - **処理時間**: データ量に応じて時間がかかります
             - **トークン制限**: モデルの制限に注意
             - **推奨モデル**: gpt-4o-2024-08-06を推奨
-            
+
             ### 主な機能
             - **トピック抽出**: テキストから主要なトピックを抽出
             - **構造化出力**: 階層的な分析結果を提供
