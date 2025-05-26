@@ -1,209 +1,17 @@
-import asyncio
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
 
-import openai
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from pydantic import BaseModel
 
-
-class TopicClassification(BaseModel):
-    """トピック分類の結果"""
-
-    text_index: int
-    main_topic_id: int
-    main_topic_name: str
-    subtopic_id: int
-    subtopic_name: str
-    confidence: float
-    reasoning: str
-
-
-class ClassificationResult(BaseModel):
-    """分類結果"""
-
-    classifications: list[TopicClassification]
-
-
-class LLMTopicClassifier:
-    def __init__(self, api_key: str, model: str = "gpt-4o", batch_size: int = 25, max_workers: int = 3):
-        """OpenAI APIを使用してトピック分類のStructured Outputを取得"""
-        self.client = openai.OpenAI(api_key=api_key)
-        self.model = model
-        self.batch_size = batch_size
-        self.max_workers = max_workers
-
-    def _create_topic_definitions(self, topics_data: dict[str, Any]) -> str:
-        """トピック定義の作成"""
-        topic_info = []
-        for topic in topics_data.get("topics", []):
-            topic_str = f"トピック{topic['id']}: {topic['name']}\n"
-            topic_str += f"  説明: {topic['description']}\n"
-            topic_str += f"  キーワード: {', '.join(topic['keywords'])}\n"
-
-            if topic.get("subtopics"):
-                topic_str += "  サブトピック:\n"
-                for subtopic in topic["subtopics"]:
-                    topic_str += f"    {subtopic['id']}: {subtopic['name']}\n"
-                    topic_str += f"      説明: {subtopic['description']}\n"
-                    topic_str += (
-                        f"      キーワード: {', '.join(subtopic['keywords'])}\n"
-                    )
-
-            topic_info.append(topic_str)
-
-        return "\n\n".join(topic_info)
-
-    def _classify_batch(
-        self, batch_texts: list[str], batch_start_index: int, topic_definitions: str
-    ) -> ClassificationResult | None:
-        """バッチでテキストを分類する"""
-        # テキストリストの作成（バッチ内のインデックスを使用）
-        text_list = "\n".join([f"{i}: {text}" for i, text in enumerate(batch_texts)])
-
-        prompt = f"""
-以下のトピック定義に基づいて、テキストをトピックとサブトピックに分類してください。
-
-トピック定義:
-{topic_definitions}
-
-テキストリスト（{len(batch_texts)}件）:
-{text_list}
-
-分類ルール:
-1. **必須**: 全ての{len(batch_texts)}件のテキスト（インデックス0から{len(batch_texts)-1}まで）を必ず分類してください
-2. テキストインデックスは0から{len(batch_texts)-1}の範囲で指定してください
-3. メイントピックとサブトピックを指定してください
-4. 信頼度を0-1の数値で指定してください
-5. 分類理由を簡潔に説明してください
-6. 最も適切なトピックを選択してください
-7. 分類できないテキストがある場合は、最も近いトピックを選択してください
-
-重要: 必ず{len(batch_texts)}件全ての分類結果を返してください。
-"""
-
-        try:
-            response = self.client.beta.chat.completions.parse(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "あなたはテキストをトピックに分類する専門家です。与えられた全てのテキストを必ず分類してください。分類結果の数は入力テキスト数と完全に一致する必要があります。",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                response_format=ClassificationResult,
-                temperature=0.1,
-            )
-
-            result = response.choices[0].message.parsed
-            
-            # 結果の検証
-            if result and result.classifications:
-                # 分類結果の数をチェック
-                if len(result.classifications) != len(batch_texts):
-                    st.warning(f"⚠️ バッチ分類で期待件数と異なる結果: 期待{len(batch_texts)}件、実際{len(result.classifications)}件")
-                
-                # バッチ内のインデックスを全体のインデックスに調整
-                for classification in result.classifications:
-                    classification.text_index += batch_start_index
-                
-                # インデックスの重複チェック
-                indices = [cls.text_index for cls in result.classifications]
-                if len(set(indices)) != len(indices):
-                    st.warning(f"⚠️ バッチ分類でインデックスの重複が発生しました")
-                
-                return result
-            else:
-                st.error(f"バッチ分類で空の結果が返されました（バッチサイズ: {len(batch_texts)}）")
-                return None
-
-        except Exception as e:
-            st.error(f"バッチ分類でエラーが発生しました: {str(e)}")
-            return None
-
-    def classify_texts_parallel(
-        self, texts: list[str], topics_data: dict[str, Any], progress_callback=None
-    ) -> ClassificationResult | None:
-        """テキストを並列でバッチ分類する"""
-        
-        topic_definitions = self._create_topic_definitions(topics_data)
-        
-        # テキストをバッチに分割
-        batches = []
-        for i in range(0, len(texts), self.batch_size):
-            batch_texts = texts[i:i + self.batch_size]
-            batches.append((batch_texts, i))
-        
-        all_classifications = []
-        completed_batches = 0
-        failed_batches = []
-        
-        # 並列処理でバッチを処理
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # 全バッチのタスクを投入
-            future_to_batch = {
-                executor.submit(self._classify_batch, batch_texts, start_index, topic_definitions): (batch_texts, start_index)
-                for batch_texts, start_index in batches
-            }
-            
-            # 完了したタスクから結果を取得
-            for future in as_completed(future_to_batch):
-                batch_texts, start_index = future_to_batch[future]
-                try:
-                    result = future.result()
-                    if result and result.classifications:
-                        all_classifications.extend(result.classifications)
-                        if progress_callback:
-                            progress_callback(
-                                int((completed_batches + 1) / len(batches) * 100),
-                                f"バッチ {completed_batches + 1}/{len(batches)} 完了 ({len(result.classifications)}件分類)"
-                            )
-                    else:
-                        failed_batches.append((start_index, len(batch_texts)))
-                        if progress_callback:
-                            progress_callback(
-                                int((completed_batches + 1) / len(batches) * 100),
-                                f"バッチ {completed_batches + 1}/{len(batches)} 失敗"
-                            )
-                    
-                    completed_batches += 1
-                        
-                except Exception as e:
-                    failed_batches.append((start_index, len(batch_texts)))
-                    st.error(f"バッチ処理でエラーが発生しました（開始インデックス: {start_index}）: {str(e)}")
-                    completed_batches += 1
-        
-        # 失敗したバッチの情報を表示
-        if failed_batches:
-            st.warning(f"⚠️ {len(failed_batches)}個のバッチで分類に失敗しました:")
-            for start_idx, batch_size in failed_batches:
-                st.write(f"  - インデックス {start_idx} から {batch_size} 件")
-        
-        # 結果をインデックス順にソート
-        all_classifications.sort(key=lambda x: x.text_index)
-        
-        # 分類結果の統計
-        expected_total = len(texts)
-        actual_total = len(all_classifications)
-        
-        if progress_callback:
-            progress_callback(100, f"完了: {actual_total}/{expected_total} 件分類")
-        
-        st.info(f"📊 分類完了: {actual_total}/{expected_total} 件 ({actual_total/expected_total*100:.1f}%)")
-        
-        return ClassificationResult(classifications=all_classifications)
-
-    def classify_texts(
-        self, texts: list[str], topics_data: dict[str, Any]
-    ) -> ClassificationResult | None:
-        """後方互換性のための従来メソッド（非推奨）"""
-        return self.classify_texts_parallel(texts, topics_data)
+from schema.llm_models import LLMModels
+from services.text_column_estimator import (
+    estimate_text_column,
+    get_text_column_recommendations,
+)
+from services.topic_classifier import LLMTopicClassifier
 
 
 def create_classification_charts(df_classified: pd.DataFrame) -> tuple:
@@ -270,7 +78,7 @@ def main():
 
     model = st.selectbox(
         "モデル",
-        ["gpt-4o", "gpt-4o-mini"],
+        LLMModels.get_model_names(),
         help="Structured Outputに対応したモデルを選択してください",
     )
 
@@ -322,9 +130,43 @@ def main():
                 df = pd.read_csv(uploaded_file)
                 st.success(f"✅ CSVファイルを読み込みました（{len(df)}行）")
 
-                # テキスト列の選択
+                # テキストカラム推定
+                recommended_column, analysis = estimate_text_column(df)
+
+                # 推奨カラム表示
+                if recommended_column:
+                    st.success(f"💡 推奨テキストカラム: **{recommended_column}**")
+
+                    with st.expander("📊 カラム分析詳細"):
+                        recommendations = get_text_column_recommendations(df, top_n=3)
+                        for i, rec in enumerate(recommendations):
+                            col_name = rec["column"]
+                            details = rec["details"]
+                            st.write(
+                                f"**{i + 1}位: {col_name}** (スコア: {rec['score']:.1f})"
+                            )
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric(
+                                    "日本語率", f"{details['japanese_ratio']:.1%}"
+                                )
+                            with col2:
+                                st.metric(
+                                    "ユニーク率", f"{details['uniqueness_ratio']:.1%}"
+                                )
+                            with col3:
+                                st.metric("平均文字数", f"{details['avg_length']:.0f}")
+                            st.divider()
+
+                # テキスト列の選択（推奨カラムをデフォルトに）
+                default_index = 0
+                if recommended_column and recommended_column in df.columns:
+                    default_index = df.columns.tolist().index(recommended_column)
+
                 text_column = st.selectbox(
-                    "テキストを含む列を選択してください", options=df.columns.tolist()
+                    "テキストを含む列を選択してください",
+                    options=df.columns.tolist(),
+                    index=default_index,
                 )
         else:
             st.warning("⚠️ トピック分析の結果がありません")
@@ -372,9 +214,41 @@ def main():
             df = pd.read_csv(uploaded_file)
             st.success(f"✅ CSVファイルを読み込みました（{len(df)}行）")
 
-            # テキスト列の選択
+            # テキストカラム推定
+            recommended_column, analysis = estimate_text_column(df)
+
+            # 推奨カラム表示
+            if recommended_column:
+                st.success(f"💡 推奨テキストカラム: **{recommended_column}**")
+
+                with st.expander("📊 カラム分析詳細"):
+                    recommendations = get_text_column_recommendations(df, top_n=3)
+                    for i, rec in enumerate(recommendations):
+                        col_name = rec["column"]
+                        details = rec["details"]
+                        st.write(
+                            f"**{i + 1}位: {col_name}** (スコア: {rec['score']:.1f})"
+                        )
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("日本語率", f"{details['japanese_ratio']:.1%}")
+                        with col2:
+                            st.metric(
+                                "ユニーク率", f"{details['uniqueness_ratio']:.1%}"
+                            )
+                        with col3:
+                            st.metric("平均文字数", f"{details['avg_length']:.0f}")
+                        st.divider()
+
+            # テキスト列の選択（推奨カラムをデフォルトに）
+            default_index = 0
+            if recommended_column and recommended_column in df.columns:
+                default_index = df.columns.tolist().index(recommended_column)
+
             text_column = st.selectbox(
-                "テキストを含む列を選択してください", options=df.columns.tolist()
+                "テキストを含む列を選択してください",
+                options=df.columns.tolist(),
+                index=default_index,
             )
 
     else:  # CSVファイルとJSONファイルの両方
@@ -405,9 +279,43 @@ def main():
                 df = pd.read_csv(uploaded_file)
                 st.success(f"✅ CSVファイルを読み込みました（{len(df)}行）")
 
-                # テキスト列の選択
+                # テキストカラム推定
+                recommended_column, analysis = estimate_text_column(df)
+
+                # 推奨カラム表示
+                if recommended_column:
+                    st.success(f"💡 推奨テキストカラム: **{recommended_column}**")
+
+                    with st.expander("📊 カラム分析詳細"):
+                        recommendations = get_text_column_recommendations(df, top_n=3)
+                        for i, rec in enumerate(recommendations):
+                            col_name = rec["column"]
+                            details = rec["details"]
+                            st.write(
+                                f"**{i + 1}位: {col_name}** (スコア: {rec['score']:.1f})"
+                            )
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric(
+                                    "日本語率", f"{details['japanese_ratio']:.1%}"
+                                )
+                            with col2:
+                                st.metric(
+                                    "ユニーク率", f"{details['uniqueness_ratio']:.1%}"
+                                )
+                            with col3:
+                                st.metric("平均文字数", f"{details['avg_length']:.0f}")
+                            st.divider()
+
+                # テキスト列の選択（推奨カラムをデフォルトに）
+                default_index = 0
+                if recommended_column and recommended_column in df.columns:
+                    default_index = df.columns.tolist().index(recommended_column)
+
                 text_column = st.selectbox(
-                    "テキストを含む列を選択してください", options=df.columns.tolist()
+                    "テキストを含む列を選択してください",
+                    options=df.columns.tolist(),
+                    index=default_index,
                 )
 
     # 分類処理
@@ -439,7 +347,7 @@ def main():
         # 並列処理設定
         st.subheader("⚙️ 並列処理設定")
         col1, col2 = st.columns(2)
-        
+
         with col1:
             batch_size = st.slider(
                 "バッチサイズ",
@@ -447,21 +355,23 @@ def main():
                 max_value=50,
                 value=25,
                 step=5,
-                help="一度に処理するテキスト数（小さいほど安定、大きいほど高速）"
+                help="一度に処理するテキスト数（小さいほど安定、大きいほど高速）",
             )
-        
+
         with col2:
             max_workers = st.slider(
                 "並列処理数",
                 min_value=1,
                 max_value=5,
                 value=3,
-                help="同時に実行するバッチ数（多すぎるとAPI制限に注意）"
+                help="同時に実行するバッチ数（多すぎるとAPI制限に注意）",
             )
 
         # 処理予測情報
         total_batches = (len(filtered_texts) + batch_size - 1) // batch_size
-        st.info(f"📊 処理予測: {total_batches}バッチ（{batch_size}件ずつ）を{max_workers}並列で処理")
+        st.info(
+            f"📊 処理予測: {total_batches}バッチ（{batch_size}件ずつ）を{max_workers}並列で処理"
+        )
 
         # 分類実行
         if st.button("🚀 トピック分類実行", type="primary"):
@@ -471,7 +381,7 @@ def main():
                 # 進捗表示
                 progress_bar = st.progress(0)
                 progress_text = st.empty()
-                
+
                 def update_progress(progress, message):
                     progress_bar.progress(progress)
                     progress_text.text(message)
@@ -503,47 +413,57 @@ def main():
                                 "subtopic_id": cls.subtopic_id,
                                 "subtopic_name": cls.subtopic_name,
                                 "confidence": cls.confidence,
-                                "reasoning": cls.reasoning,
+                                "sentiment": cls.sentiment.value,
                             }
                         )
 
                     classification_df = pd.DataFrame(classification_data)
-                    
+
                     # デバッグ情報を表示
-                    st.write(f"🔍 デバッグ情報:")
+                    st.write("🔍 デバッグ情報:")
                     st.write(f"  - 元データ件数: {len(filtered_df)}")
                     st.write(f"  - 分類結果件数: {len(classification_df)}")
-                    st.write(f"  - 分類結果インデックス範囲: {classification_df['text_index'].min()} - {classification_df['text_index'].max()}")
+                    st.write(
+                        f"  - 分類結果インデックス範囲: {classification_df['text_index'].min()} - {classification_df['text_index'].max()}"
+                    )
 
                     # 結果の結合
                     result_df = filtered_df.copy()
                     result_df = result_df.reset_index(drop=True)
-                    
+
                     # 分類結果がない行のためのデフォルト値を設定
                     result_df["メイントピックID"] = None
                     result_df["メイントピック"] = "未分類"
                     result_df["サブトピックID"] = None
                     result_df["サブトピック"] = "未分類"
                     result_df["分類確度"] = 0.0
-                    result_df["分類理由"] = "分類されませんでした"
+                    result_df["センチメント"] = "未分類"
 
                     # 分類結果をtext_indexに基づいてマージ
                     for _, row in classification_df.iterrows():
                         idx = row["text_index"]
                         if 0 <= idx < len(result_df):
-                            result_df.loc[idx, "メイントピックID"] = row["main_topic_id"]
-                            result_df.loc[idx, "メイントピック"] = row["main_topic_name"]
+                            result_df.loc[idx, "メイントピックID"] = row[
+                                "main_topic_id"
+                            ]
+                            result_df.loc[idx, "メイントピック"] = row[
+                                "main_topic_name"
+                            ]
                             result_df.loc[idx, "サブトピックID"] = row["subtopic_id"]
                             result_df.loc[idx, "サブトピック"] = row["subtopic_name"]
                             result_df.loc[idx, "分類確度"] = row["confidence"]
-                            result_df.loc[idx, "分類理由"] = row["reasoning"]
-                    
+                            result_df.loc[idx, "センチメント"] = row["sentiment"]
+
                     # 分類統計を表示
-                    classified_count = len(result_df[result_df["メイントピック"] != "未分類"])
+                    classified_count = len(
+                        result_df[result_df["メイントピック"] != "未分類"]
+                    )
                     st.write(f"  - 分類済み件数: {classified_count} / {len(result_df)}")
-                    
+
                     if classified_count < len(result_df):
-                        st.warning(f"⚠️ {len(result_df) - classified_count}件が未分類です。バッチサイズや並列処理数を調整してみてください。")
+                        st.warning(
+                            f"⚠️ {len(result_df) - classified_count}件が未分類です。バッチサイズや並列処理数を調整してみてください。"
+                        )
 
                     # セッション状態の保存
                     st.session_state["classification_result"] = result_df

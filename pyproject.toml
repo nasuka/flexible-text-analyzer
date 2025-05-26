@@ -15,6 +15,8 @@ dependencies = [
     "openai>=1.82.0",
     "pydantic>=2.11.5",
     "networkx>=3.0",
+    "litellm>=1.71.1",
+    "openrouter>=1.0",
 ]
 readme = "README.md"
 requires-python = ">= 3.12"
