@@ -116,8 +116,8 @@ def get_required_headers(provider: LLMProvider, api_key: str) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://mirai-analyzer.local",  # Optional: サイト識別用
-            "X-Title": "Mirai Analyzer",  # Optional: アプリ名
+            "HTTP-Referer": "https://text-analyzer.local",  # Optional: サイト識別用
+            "X-Title": "Text Analyzer",  # Optional: アプリ名
         }
     else:
         return {

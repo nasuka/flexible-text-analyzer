@@ -659,6 +659,16 @@ def main():
     if topics_data is not None and df is not None and text_column is not None:
         st.header("📊 分類")
 
+        # データ説明入力
+        st.subheader("📝 データ説明")
+        data_description = st.text_area(
+            "データの説明（任意）",
+            value="",
+            placeholder="例: このデータは商品レビューコメントです。ユーザーが商品に対する感想や評価を記載しています。",
+            help="データの内容や背景を説明してください。より正確な分類に役立ちます。",
+            height=100,
+        )
+
         # データ制限
         data_limit = st.slider(
             "データ件数",
@@ -728,11 +738,14 @@ def main():
                 # トピック定義の整形
                 if isinstance(topics_data, dict) and "topics" in topics_data:
                     classification_result = classifier.classify_texts_parallel(
-                        filtered_texts, topics_data, update_progress
+                        filtered_texts, topics_data, update_progress, data_description
                     )
                 else:
                     classification_result = classifier.classify_texts_parallel(
-                        filtered_texts, {"topics": topics_data}, update_progress
+                        filtered_texts,
+                        {"topics": topics_data},
+                        update_progress,
+                        data_description,
                     )
 
                 progress_bar.progress(100)

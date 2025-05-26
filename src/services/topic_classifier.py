@@ -44,16 +44,29 @@ class LLMTopicClassifier:
         return "\n\n".join(topic_info)
 
     def _classify_batch(
-        self, batch_texts: list[str], batch_start_index: int, topic_definitions: str
+        self,
+        batch_texts: list[str],
+        batch_start_index: int,
+        topic_definitions: str,
+        data_description: str = "",
     ) -> ClassificationResult | None:
         """バッチでテキストを分類する"""
         # テキストリストの作成（バッチ内のインデックスを使用）
         text_list = "\n".join([f"{i}: {text}" for i, text in enumerate(batch_texts)])
 
+        # データ説明部分の構築
+        data_context = ""
+        if data_description.strip():
+            data_context = f"""
+データの背景・説明:
+{data_description.strip()}
+
+"""
+
         prompt = f"""
 以下のトピック定義に基づいて、テキストをトピックとサブトピックに分類してください。
 
-トピック定義:
+{data_context}トピック定義:
 {topic_definitions}
 
 テキストリスト（{len(batch_texts)}件）:
@@ -67,6 +80,7 @@ class LLMTopicClassifier:
 5. 分類理由を簡潔に説明してください
 6. 最も適切なトピックを選択してください
 7. 分類できないテキストがある場合は、「その他」というトピック・サブトピックに割り当ててください
+8. データの背景・説明を参考にして、文脈に適した分類を行ってください
 
 重要: 必ず{len(batch_texts)}件全ての分類結果を返してください。
 """
@@ -110,7 +124,11 @@ class LLMTopicClassifier:
             return None
 
     def classify_texts_parallel(
-        self, texts: list[str], topics_data: dict[str, Any], progress_callback=None
+        self,
+        texts: list[str],
+        topics_data: dict[str, Any],
+        progress_callback=None,
+        data_description: str = "",
     ) -> ClassificationResult | None:
         """テキストを並列でバッチ分類する"""
 
@@ -131,7 +149,11 @@ class LLMTopicClassifier:
             # 全バッチのタスクを投入
             future_to_batch = {
                 executor.submit(
-                    self._classify_batch, batch_texts, start_index, topic_definitions
+                    self._classify_batch,
+                    batch_texts,
+                    start_index,
+                    topic_definitions,
+                    data_description,
                 ): (batch_texts, start_index)
                 for batch_texts, start_index in batches
             }
@@ -188,7 +210,9 @@ class LLMTopicClassifier:
         return ClassificationResult(classifications=all_classifications)
 
     def classify_texts(
-        self, texts: list[str], topics_data: dict[str, Any]
+        self, texts: list[str], topics_data: dict[str, Any], data_description: str = ""
     ) -> ClassificationResult | None:
         """後方互換性のための従来メソッド（非推奨）"""
-        return self.classify_texts_parallel(texts, topics_data)
+        return self.classify_texts_parallel(
+            texts, topics_data, data_description=data_description
+        )

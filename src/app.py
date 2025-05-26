@@ -1,13 +1,13 @@
 import streamlit as st
 
 st.set_page_config(
-    page_title="Mirai Analyzer",
+    page_title="Text Analyzer",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("🔍 Mirai Analyzer")
+st.title("🔍 Text Analyzer")
 st.markdown("---")
 
 st.markdown("""

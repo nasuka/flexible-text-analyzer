@@ -1,5 +1,5 @@
 [project]
-name = "mirai-analyzer"
+name = "text-analyzer"
 version = "0.1.0"
 description = "Add your description here"
 authors = [
@@ -33,7 +33,7 @@ dev-dependencies = []
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mirai_analyzer"]
+packages = ["src/text_analyzer"]
 
 [tool.ruff]
 line-length = 88
@@ -54,7 +54,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["mirai_analyzer"]
+known-first-party = ["text_analyzer"]
 
 [tool.ruff.format]
 quote-style = "double"

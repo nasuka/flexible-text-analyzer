@@ -1,4 +1,4 @@
-# Mirai Analyzer
+# Text Analyzer
 
 ## プロジェクト概要
 Streamlitを使用したテキスト分析Webアプリケーション。LLMを活用してテキストデータのトピック抽出・分類を行う高度な分析ツールです。
@@ -38,7 +38,7 @@ Streamlitを使用したテキスト分析Webアプリケーション。LLMを�
 
 ## プロジェクト構成
 ```
-mirai-analyzer/
+text-analyzer/
 ├── src/
 │   ├── app.py                      # Streamlitアプリのメインファイル
 │   └── pages/
