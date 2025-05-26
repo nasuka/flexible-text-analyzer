@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from schema.llm_models import LLMModels
+from schema.llm_providers import LLMModel, LLMProvider
 from schema.topic import SentimentAnalysis, TopicAnalysisResult
 from services.text_column_estimator import (
     estimate_text_column,
@@ -188,23 +188,68 @@ def main():
     st.title("LLMによるトピック抽出 (Structured Output)")
     st.markdown("---")
 
-    # OpenAI API設定
-    st.header("API設定")
-    api_key = st.text_input(
-        "OpenAI API Key",
-        value=os.getenv("OPENAI_API_KEY", ""),
-        type="password",
-        help="OpenAI APIキーを入力してください",
+    # LLM API設定
+    st.header("LLM設定")
+
+    # プロバイダー選択
+    provider_display_names = [provider.get_display_name() for provider in LLMProvider]
+    selected_provider_display = st.selectbox(
+        "LLMプロバイダー",
+        provider_display_names,
+        help="使用するLLMプロバイダーを選択してください",
     )
 
-    model = st.selectbox(
+    # 選択されたプロバイダーを取得
+    selected_provider = None
+    for provider in LLMProvider:
+        if provider.get_display_name() == selected_provider_display:
+            selected_provider = provider
+            break
+
+    # APIキー入力
+    api_key_label = f"{selected_provider.get_display_name()} API Key"
+    api_key_help = f"{selected_provider.get_display_name()} APIキーを入力してください"
+
+    if selected_provider == LLMProvider.OPENAI:
+        api_key = st.text_input(
+            api_key_label,
+            value=os.getenv("OPENAI_API_KEY", ""),
+            type="password",
+            help=api_key_help,
+        )
+    elif selected_provider == LLMProvider.OPENROUTER:
+        api_key = st.text_input(
+            api_key_label,
+            value=os.getenv("OPENROUTER_API_KEY", ""),
+            type="password",
+            help=api_key_help,
+        )
+    else:
+        api_key = st.text_input(
+            api_key_label,
+            type="password",
+            help=api_key_help,
+        )
+
+    # モデル選択
+    available_models = LLMModel.get_models_by_provider(selected_provider)
+    model_display_names = [model.get_display_name() for model in available_models]
+
+    selected_model_display = st.selectbox(
         "モデル選択",
-        LLMModels.get_model_names(),
-        help="Structured Output対応のモデルを選択してください",
+        model_display_names,
+        help="使用するモデルを選択してください",
     )
+
+    # 選択されたモデルを取得
+    selected_model = None
+    for model in available_models:
+        if model.get_display_name() == selected_model_display:
+            selected_model = model
+            break
 
     if not api_key:
-        st.warning("OpenAI APIキーを入力してください")
+        st.warning(f"{selected_provider.get_display_name()} APIキーを入力してください")
         return
 
     # CSVファイルアップロード
@@ -313,7 +358,7 @@ def main():
                         st.error("分析には最低5件のデータが必要です")
                     else:
                         with st.spinner("LLMによる分析中..."):
-                            extractor = LLMTopicExtractor(api_key, model)
+                            extractor = LLMTopicExtractor(api_key, selected_model.value)
 
                             # トピック抽出
                             st.write("トピック抽出中...")
@@ -328,7 +373,8 @@ def main():
                                 # セッション状態に結果を保存
                                 st.session_state["topics_result"] = topics_result
                                 st.session_state["analysis_settings"] = {
-                                    "model": model,
+                                    "provider": selected_provider.get_display_name(),
+                                    "model": selected_model.get_display_name(),
                                     "n_topics": n_topics if n_topics else "自動決定",
                                     "n_subtopics": n_subtopics
                                     if n_subtopics

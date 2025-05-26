@@ -6,7 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from schema.llm_models import LLMModels
+from schema.llm_providers import LLMModel, LLMProvider
 from services.text_column_estimator import (
     estimate_text_column,
     get_text_column_recommendations,
@@ -67,23 +67,70 @@ def main():
     st.title("📊 LLMトピック分類")
     st.markdown("---")
 
-    # OpenAI API設定
-    st.header("🔑 API設定")
-    api_key = st.text_input(
-        "OpenAI API Key",
-        value=os.getenv("OPENAI_API_KEY", ""),
-        type="password",
-        help="OpenAI APIキーを入力してください",
+    # LLM API設定
+    st.header("🔑 LLM設定")
+
+    # プロバイダー選択
+    provider_display_names = [provider.get_display_name() for provider in LLMProvider]
+    selected_provider_display = st.selectbox(
+        "LLMプロバイダー",
+        provider_display_names,
+        help="使用するLLMプロバイダーを選択してください",
     )
 
-    model = st.selectbox(
-        "モデル",
-        LLMModels.get_model_names(),
-        help="Structured Outputに対応したモデルを選択してください",
+    # 選択されたプロバイダーを取得
+    selected_provider = None
+    for provider in LLMProvider:
+        if provider.get_display_name() == selected_provider_display:
+            selected_provider = provider
+            break
+
+    # APIキー入力
+    api_key_label = f"{selected_provider.get_display_name()} API Key"
+    api_key_help = f"{selected_provider.get_display_name()} APIキーを入力してください"
+
+    if selected_provider == LLMProvider.OPENAI:
+        api_key = st.text_input(
+            api_key_label,
+            value=os.getenv("OPENAI_API_KEY", ""),
+            type="password",
+            help=api_key_help,
+        )
+    elif selected_provider == LLMProvider.OPENROUTER:
+        api_key = st.text_input(
+            api_key_label,
+            value=os.getenv("OPENROUTER_API_KEY", ""),
+            type="password",
+            help=api_key_help,
+        )
+    else:
+        api_key = st.text_input(
+            api_key_label,
+            type="password",
+            help=api_key_help,
+        )
+
+    # モデル選択
+    available_models = LLMModel.get_models_by_provider(selected_provider)
+    model_display_names = [model.get_display_name() for model in available_models]
+
+    selected_model_display = st.selectbox(
+        "モデル選択",
+        model_display_names,
+        help="使用するモデルを選択してください",
     )
+
+    # 選択されたモデルを取得
+    selected_model = None
+    for model in available_models:
+        if model.get_display_name() == selected_model_display:
+            selected_model = model
+            break
 
     if not api_key:
-        st.warning("⚠️ OpenAI API キーを入力してください")
+        st.warning(
+            f"⚠️ {selected_provider.get_display_name()} API キーを入力してください"
+        )
         return
 
     # データ入力設定
@@ -94,6 +141,7 @@ def main():
         "データ入力方法を選択してください",
         [
             "トピック分析の結果を使用",
+            "ページ上でトピックを定義",
             "JSONファイルをアップロード",
             "CSVファイルとJSONファイルを組み合わせる",
         ],
@@ -170,6 +218,295 @@ def main():
                 )
         else:
             st.warning("⚠️ トピック分析の結果がありません")
+
+    elif input_method == "ページ上でトピックを定義":
+        # ページ上でのトピック定義
+        st.subheader("📝 トピック定義")
+
+        # サブトピック分類のオプション
+        use_subtopics = st.checkbox(
+            "サブトピック分類を含める",
+            value=False,
+            help="チェックするとサブトピックも定義して分類できます",
+        )
+
+        # セッション状態の初期化
+        if "custom_topics" not in st.session_state:
+            st.session_state["custom_topics"] = [
+                {
+                    "id": 1,
+                    "name": "",
+                    "description": "",
+                    "keywords": "",
+                    "subtopics": [],
+                }
+            ]
+
+        st.markdown("#### トピック追加・編集")
+
+        # トピック追加ボタン
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("➕ トピック追加"):
+                new_id = (
+                    max([t["id"] for t in st.session_state["custom_topics"]], default=0)
+                    + 1
+                )
+                st.session_state["custom_topics"].append(
+                    {
+                        "id": new_id,
+                        "name": "",
+                        "description": "",
+                        "keywords": "",
+                        "subtopics": [],
+                    }
+                )
+                st.rerun()
+
+        with col2:
+            if st.button("🗑️ 全てリセット"):
+                st.session_state["custom_topics"] = [
+                    {
+                        "id": 1,
+                        "name": "",
+                        "description": "",
+                        "keywords": "",
+                        "subtopics": [],
+                    }
+                ]
+                st.rerun()
+
+        # 各トピックの編集
+        topics_to_remove = []
+
+        for i, topic in enumerate(st.session_state["custom_topics"]):
+            with st.expander(
+                f"トピック {topic['id']}: {topic['name'] or '（未設定）'}",
+                expanded=True,
+            ):
+                col1, col2 = st.columns([4, 1])
+
+                with col1:
+                    # トピック基本情報
+                    topic["name"] = st.text_input(
+                        "トピック名",
+                        value=topic["name"],
+                        key=f"topic_name_{topic['id']}",
+                        placeholder="例: 商品の品質",
+                    )
+
+                    topic["description"] = st.text_area(
+                        "説明",
+                        value=topic["description"],
+                        key=f"topic_desc_{topic['id']}",
+                        placeholder="例: 商品の品質に関する意見や評価",
+                        height=80,
+                    )
+
+                    topic["keywords"] = st.text_input(
+                        "キーワード（カンマ区切り）",
+                        value=topic["keywords"],
+                        key=f"topic_keywords_{topic['id']}",
+                        placeholder="例: 品質, 質, 良い, 悪い, 耐久性",
+                    )
+
+                with col2:
+                    if len(st.session_state["custom_topics"]) > 1:
+                        if st.button(
+                            "🗑️",
+                            key=f"remove_topic_{topic['id']}",
+                            help="このトピックを削除",
+                        ):
+                            topics_to_remove.append(i)
+
+                # サブトピック定義
+                if use_subtopics:
+                    st.markdown("**サブトピック**")
+
+                    # サブトピック追加ボタン
+                    if st.button(
+                        "➕ サブトピック追加", key=f"add_subtopic_{topic['id']}"
+                    ):
+                        new_subtopic_id = (
+                            max([s["id"] for s in topic["subtopics"]], default=0) + 1
+                        )
+                        topic["subtopics"].append(
+                            {
+                                "id": new_subtopic_id,
+                                "name": "",
+                                "description": "",
+                                "keywords": "",
+                            }
+                        )
+                        st.rerun()
+
+                    # サブトピック編集
+                    subtopics_to_remove = []
+                    for j, subtopic in enumerate(topic["subtopics"]):
+                        st.markdown(f"**サブトピック {subtopic['id']}**")
+
+                        col_sub1, col_sub2 = st.columns([4, 1])
+
+                        with col_sub1:
+                            subtopic["name"] = st.text_input(
+                                "名前",
+                                value=subtopic["name"],
+                                key=f"subtopic_name_{topic['id']}_{subtopic['id']}",
+                                placeholder="例: 耐久性",
+                                label_visibility="collapsed",
+                            )
+
+                            subtopic["description"] = st.text_area(
+                                "説明",
+                                value=subtopic["description"],
+                                key=f"subtopic_desc_{topic['id']}_{subtopic['id']}",
+                                placeholder="例: 商品の耐久性に関する評価",
+                                height=60,
+                                label_visibility="collapsed",
+                            )
+
+                            subtopic["keywords"] = st.text_input(
+                                "キーワード",
+                                value=subtopic["keywords"],
+                                key=f"subtopic_keywords_{topic['id']}_{subtopic['id']}",
+                                placeholder="例: 耐久性, 長持ち, 壊れやすい",
+                                label_visibility="collapsed",
+                            )
+
+                        with col_sub2:
+                            if st.button(
+                                "🗑️",
+                                key=f"remove_subtopic_{topic['id']}_{subtopic['id']}",
+                                help="このサブトピックを削除",
+                            ):
+                                subtopics_to_remove.append(j)
+
+                    # サブトピック削除処理
+                    for idx in reversed(subtopics_to_remove):
+                        topic["subtopics"].pop(idx)
+
+                    if subtopics_to_remove:
+                        st.rerun()
+
+        # トピック削除処理
+        for idx in reversed(topics_to_remove):
+            st.session_state["custom_topics"].pop(idx)
+
+        if topics_to_remove:
+            st.rerun()
+
+        # トピック定義の検証と構造化データ作成
+        valid_topics = []
+        for topic in st.session_state["custom_topics"]:
+            if topic["name"].strip():
+                # キーワードをリストに変換
+                keywords = [
+                    kw.strip() for kw in topic["keywords"].split(",") if kw.strip()
+                ]
+
+                valid_topic = {
+                    "id": topic["id"],
+                    "name": topic["name"].strip(),
+                    "description": topic["description"].strip()
+                    or topic["name"].strip(),
+                    "keywords": keywords,
+                }
+
+                if use_subtopics:
+                    valid_subtopics = []
+                    for subtopic in topic["subtopics"]:
+                        if subtopic["name"].strip():
+                            sub_keywords = [
+                                kw.strip()
+                                for kw in subtopic["keywords"].split(",")
+                                if kw.strip()
+                            ]
+                            valid_subtopics.append(
+                                {
+                                    "id": subtopic["id"],
+                                    "name": subtopic["name"].strip(),
+                                    "description": subtopic["description"].strip()
+                                    or subtopic["name"].strip(),
+                                    "keywords": sub_keywords,
+                                }
+                            )
+                    valid_topic["subtopics"] = valid_subtopics
+                else:
+                    valid_topic["subtopics"] = []
+
+                valid_topics.append(valid_topic)
+
+        if valid_topics:
+            topics_data = {"topics": valid_topics}
+
+            # 定義されたトピックのプレビュー
+            with st.expander("📋 定義されたトピック一覧"):
+                for topic in valid_topics:
+                    st.write(f"**トピック{topic['id']}: {topic['name']}**")
+                    st.write(f"　説明: {topic['description']}")
+                    if topic["keywords"]:
+                        st.write(f"　キーワード: {', '.join(topic['keywords'])}")
+
+                    if use_subtopics and topic.get("subtopics"):
+                        st.write("　サブトピック:")
+                        for subtopic in topic["subtopics"]:
+                            st.write(
+                                f"　　- {subtopic['name']}: {subtopic['description']}"
+                            )
+                            if subtopic["keywords"]:
+                                st.write(
+                                    f"　　　キーワード: {', '.join(subtopic['keywords'])}"
+                                )
+                    st.divider()
+
+        # CSVファイルのアップロード
+        st.subheader("テキストCSVファイル")
+        uploaded_file = st.file_uploader(
+            "テキストデータを含むCSVファイルをアップロードしてください",
+            type=["csv"],
+            key="classification_csv_custom",
+        )
+
+        if uploaded_file is not None:
+            df = pd.read_csv(uploaded_file)
+            st.success(f"✅ CSVファイルを読み込みました（{len(df)}行）")
+
+            # テキストカラム推定
+            recommended_column, analysis = estimate_text_column(df)
+
+            # 推奨カラム表示
+            if recommended_column:
+                st.success(f"💡 推奨テキストカラム: **{recommended_column}**")
+
+                with st.expander("📊 カラム分析詳細"):
+                    recommendations = get_text_column_recommendations(df, top_n=3)
+                    for i, rec in enumerate(recommendations):
+                        col_name = rec["column"]
+                        details = rec["details"]
+                        st.write(
+                            f"**{i + 1}位: {col_name}** (スコア: {rec['score']:.1f})"
+                        )
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("日本語率", f"{details['japanese_ratio']:.1%}")
+                        with col2:
+                            st.metric(
+                                "ユニーク率", f"{details['uniqueness_ratio']:.1%}"
+                            )
+                        with col3:
+                            st.metric("平均文字数", f"{details['avg_length']:.0f}")
+                        st.divider()
+
+            # テキスト列の選択（推奨カラムをデフォルトに）
+            default_index = 0
+            if recommended_column and recommended_column in df.columns:
+                default_index = df.columns.tolist().index(recommended_column)
+
+            text_column = st.selectbox(
+                "テキストを含む列を選択してください",
+                options=df.columns.tolist(),
+                index=default_index,
+            )
 
     elif input_method == "JSONファイルをアップロード":
         st.subheader("トピック定義JSONファイル")
@@ -376,7 +713,9 @@ def main():
         # 分類実行
         if st.button("🚀 トピック分類実行", type="primary"):
             with st.spinner("🤖 LLMによるトピック分類中..."):
-                classifier = LLMTopicClassifier(api_key, model, batch_size, max_workers)
+                classifier = LLMTopicClassifier(
+                    api_key, selected_model.value, batch_size, max_workers
+                )
 
                 # 進捗表示
                 progress_bar = st.progress(0)
@@ -558,7 +897,8 @@ def main():
         # JSON形式で出力
         classification_json = {
             "classification_settings": {
-                "model": model,
+                "provider": selected_provider.get_display_name(),
+                "model": selected_model.get_display_name(),
                 "data_count": len(result_df),
                 "unique_topics": classification_df["main_topic_name"].nunique(),
             },
