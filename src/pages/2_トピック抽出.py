@@ -45,7 +45,7 @@ class SentimentAnalysis(BaseModel):
 
 
 class LLMTopicExtractor:
-    def __init__(self, api_key: str, model: str = "gpt-4o-2024-08-06"):
+    def __init__(self, api_key: str, model: str = "gpt-4o"):
         """OpenAI APIを使用したトピック抽出のStructured Output対応"""
         self.client = openai.OpenAI(api_key=api_key)
         self.model = model
@@ -193,7 +193,7 @@ def main():
 
     model = st.selectbox(
         "モデル選択",
-        ["gpt-4o-2024-08-06", "gpt-4o-mini"],
+        ["gpt-4o", "gpt-4o-mini"],
         help="Structured Output対応のモデルを選択してください",
     )
 

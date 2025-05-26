@@ -31,7 +31,7 @@ class ClassificationResult(BaseModel):
 
 
 class LLMTopicClassifier:
-    def __init__(self, api_key: str, model: str = "gpt-4o-2024-08-06", batch_size: int = 50, max_workers: int = 5):
+    def __init__(self, api_key: str, model: str = "gpt-4o", batch_size: int = 25, max_workers: int = 3):
         """OpenAI APIを使用してトピック分類のStructured Outputを取得"""
         self.client = openai.OpenAI(api_key=api_key)
         self.model = model
@@ -63,7 +63,6 @@ class LLMTopicClassifier:
         self, batch_texts: list[str], batch_start_index: int, topic_definitions: str
     ) -> ClassificationResult | None:
         """バッチでテキストを分類する"""
-        
         # テキストリストの作成（バッチ内のインデックスを使用）
         text_list = "\n".join([f"{i}: {text}" for i, text in enumerate(batch_texts)])
 
@@ -73,15 +72,19 @@ class LLMTopicClassifier:
 トピック定義:
 {topic_definitions}
 
-テキストリスト:
+テキストリスト（{len(batch_texts)}件）:
 {text_list}
 
 分類ルール:
-1. テキストを0から始まるインデックスで指定してください（このバッチ内でのインデックス）
-2. メイントピックとサブトピックを指定してください
-3. 信頼度を0-1の数値で指定してください
-4. 分類理由を簡潔に説明してください
-5. 最も適切なトピックを選択してください
+1. **必須**: 全ての{len(batch_texts)}件のテキスト（インデックス0から{len(batch_texts)-1}まで）を必ず分類してください
+2. テキストインデックスは0から{len(batch_texts)-1}の範囲で指定してください
+3. メイントピックとサブトピックを指定してください
+4. 信頼度を0-1の数値で指定してください
+5. 分類理由を簡潔に説明してください
+6. 最も適切なトピックを選択してください
+7. 分類できないテキストがある場合は、最も近いトピックを選択してください
+
+重要: 必ず{len(batch_texts)}件全ての分類結果を返してください。
 """
 
         try:
@@ -90,7 +93,7 @@ class LLMTopicClassifier:
                 messages=[
                     {
                         "role": "system",
-                        "content": "あなたはテキストをトピックに分類する専門家です。与えられたトピック定義に基づいてテキストを分類してください。",
+                        "content": "あなたはテキストをトピックに分類する専門家です。与えられた全てのテキストを必ず分類してください。分類結果の数は入力テキスト数と完全に一致する必要があります。",
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -100,12 +103,25 @@ class LLMTopicClassifier:
 
             result = response.choices[0].message.parsed
             
-            # バッチ内のインデックスを全体のインデックスに調整
-            if result:
+            # 結果の検証
+            if result and result.classifications:
+                # 分類結果の数をチェック
+                if len(result.classifications) != len(batch_texts):
+                    st.warning(f"⚠️ バッチ分類で期待件数と異なる結果: 期待{len(batch_texts)}件、実際{len(result.classifications)}件")
+                
+                # バッチ内のインデックスを全体のインデックスに調整
                 for classification in result.classifications:
                     classification.text_index += batch_start_index
-            
-            return result
+                
+                # インデックスの重複チェック
+                indices = [cls.text_index for cls in result.classifications]
+                if len(set(indices)) != len(indices):
+                    st.warning(f"⚠️ バッチ分類でインデックスの重複が発生しました")
+                
+                return result
+            else:
+                st.error(f"バッチ分類で空の結果が返されました（バッチサイズ: {len(batch_texts)}）")
+                return None
 
         except Exception as e:
             st.error(f"バッチ分類でエラーが発生しました: {str(e)}")
@@ -126,6 +142,7 @@ class LLMTopicClassifier:
         
         all_classifications = []
         completed_batches = 0
+        failed_batches = []
         
         # 並列処理でバッチを処理
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -142,19 +159,43 @@ class LLMTopicClassifier:
                     result = future.result()
                     if result and result.classifications:
                         all_classifications.extend(result.classifications)
+                        if progress_callback:
+                            progress_callback(
+                                int((completed_batches + 1) / len(batches) * 100),
+                                f"バッチ {completed_batches + 1}/{len(batches)} 完了 ({len(result.classifications)}件分類)"
+                            )
+                    else:
+                        failed_batches.append((start_index, len(batch_texts)))
+                        if progress_callback:
+                            progress_callback(
+                                int((completed_batches + 1) / len(batches) * 100),
+                                f"バッチ {completed_batches + 1}/{len(batches)} 失敗"
+                            )
                     
                     completed_batches += 1
-                    
-                    # 進捗更新
-                    if progress_callback:
-                        progress = int((completed_batches / len(batches)) * 100)
-                        progress_callback(progress, f"バッチ {completed_batches}/{len(batches)} 完了")
                         
                 except Exception as e:
-                    st.error(f"バッチ処理でエラーが発生しました: {str(e)}")
+                    failed_batches.append((start_index, len(batch_texts)))
+                    st.error(f"バッチ処理でエラーが発生しました（開始インデックス: {start_index}）: {str(e)}")
+                    completed_batches += 1
+        
+        # 失敗したバッチの情報を表示
+        if failed_batches:
+            st.warning(f"⚠️ {len(failed_batches)}個のバッチで分類に失敗しました:")
+            for start_idx, batch_size in failed_batches:
+                st.write(f"  - インデックス {start_idx} から {batch_size} 件")
         
         # 結果をインデックス順にソート
         all_classifications.sort(key=lambda x: x.text_index)
+        
+        # 分類結果の統計
+        expected_total = len(texts)
+        actual_total = len(all_classifications)
+        
+        if progress_callback:
+            progress_callback(100, f"完了: {actual_total}/{expected_total} 件分類")
+        
+        st.info(f"📊 分類完了: {actual_total}/{expected_total} 件 ({actual_total/expected_total*100:.1f}%)")
         
         return ClassificationResult(classifications=all_classifications)
 
@@ -229,7 +270,7 @@ def main():
 
     model = st.selectbox(
         "モデル",
-        ["gpt-4o-2024-08-06", "gpt-4o-mini"],
+        ["gpt-4o", "gpt-4o-mini"],
         help="Structured Outputに対応したモデルを選択してください",
     )
 
@@ -402,20 +443,20 @@ def main():
         with col1:
             batch_size = st.slider(
                 "バッチサイズ",
-                min_value=10,
-                max_value=100,
-                value=50,
-                step=10,
-                help="一度に処理するテキスト数"
+                min_value=5,
+                max_value=50,
+                value=25,
+                step=5,
+                help="一度に処理するテキスト数（小さいほど安定、大きいほど高速）"
             )
         
         with col2:
             max_workers = st.slider(
                 "並列処理数",
                 min_value=1,
-                max_value=10,
-                value=5,
-                help="同時に実行するバッチ数"
+                max_value=5,
+                value=3,
+                help="同時に実行するバッチ数（多すぎるとAPI制限に注意）"
             )
 
         # 処理予測情報
@@ -467,18 +508,42 @@ def main():
                         )
 
                     classification_df = pd.DataFrame(classification_data)
+                    
+                    # デバッグ情報を表示
+                    st.write(f"🔍 デバッグ情報:")
+                    st.write(f"  - 元データ件数: {len(filtered_df)}")
+                    st.write(f"  - 分類結果件数: {len(classification_df)}")
+                    st.write(f"  - 分類結果インデックス範囲: {classification_df['text_index'].min()} - {classification_df['text_index'].max()}")
 
                     # 結果の結合
                     result_df = filtered_df.copy()
                     result_df = result_df.reset_index(drop=True)
+                    
+                    # 分類結果がない行のためのデフォルト値を設定
+                    result_df["メイントピックID"] = None
+                    result_df["メイントピック"] = "未分類"
+                    result_df["サブトピックID"] = None
+                    result_df["サブトピック"] = "未分類"
+                    result_df["分類確度"] = 0.0
+                    result_df["分類理由"] = "分類されませんでした"
 
-                    # 分類結果の追加
-                    result_df["メイントピックID"] = classification_df["main_topic_id"]
-                    result_df["メイントピック"] = classification_df["main_topic_name"]
-                    result_df["サブトピックID"] = classification_df["subtopic_id"]
-                    result_df["サブトピック"] = classification_df["subtopic_name"]
-                    result_df["分類確度"] = classification_df["confidence"]
-                    result_df["分類理由"] = classification_df["reasoning"]
+                    # 分類結果をtext_indexに基づいてマージ
+                    for _, row in classification_df.iterrows():
+                        idx = row["text_index"]
+                        if 0 <= idx < len(result_df):
+                            result_df.loc[idx, "メイントピックID"] = row["main_topic_id"]
+                            result_df.loc[idx, "メイントピック"] = row["main_topic_name"]
+                            result_df.loc[idx, "サブトピックID"] = row["subtopic_id"]
+                            result_df.loc[idx, "サブトピック"] = row["subtopic_name"]
+                            result_df.loc[idx, "分類確度"] = row["confidence"]
+                            result_df.loc[idx, "分類理由"] = row["reasoning"]
+                    
+                    # 分類統計を表示
+                    classified_count = len(result_df[result_df["メイントピック"] != "未分類"])
+                    st.write(f"  - 分類済み件数: {classified_count} / {len(result_df)}")
+                    
+                    if classified_count < len(result_df):
+                        st.warning(f"⚠️ {len(result_df) - classified_count}件が未分類です。バッチサイズや並列処理数を調整してみてください。")
 
                     # セッション状態の保存
                     st.session_state["classification_result"] = result_df
