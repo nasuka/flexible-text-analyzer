@@ -311,16 +311,73 @@ def main():
             )
 
             if text_column:
+                # トピック定義方法の選択
+                st.subheader("トピック定義方法")
+                extraction_method = st.radio(
+                    "トピック定義方法を選択",
+                    ["完全自動", "ユーザー定義トピック"],
+                    index=0,
+                    help="完全自動：LLMがデータから自動でトピックとサブトピックを決定\nユーザー定義：指定したトピックから自動でサブトピックを生成"
+                )
+
+                user_topics = None
+                if extraction_method == "ユーザー定義トピック":
+                    st.subheader("トピック定義")
+                    
+                    # セッション状態でユーザー定義トピックを管理
+                    if "user_defined_topics" not in st.session_state:
+                        st.session_state.user_defined_topics = [""]
+                    
+                    st.write("分析したいトピックを入力してください。サブトピックは自動で生成されます。")
+                    
+                    # トピック入力フィールド
+                    topics_container = st.container()
+                    with topics_container:
+                        for i, topic in enumerate(st.session_state.user_defined_topics):
+                            col1, col2 = st.columns([4, 1])
+                            with col1:
+                                new_topic = st.text_input(
+                                    f"トピック {i + 1}",
+                                    value=topic,
+                                    key=f"user_topic_{i}",
+                                    placeholder="例: 商品の品質について"
+                                )
+                                st.session_state.user_defined_topics[i] = new_topic
+                            with col2:
+                                if st.button("削除", key=f"delete_topic_{i}", disabled=len(st.session_state.user_defined_topics) <= 1):
+                                    st.session_state.user_defined_topics.pop(i)
+                                    st.rerun()
+                    
+                    # トピック追加ボタン
+                    if st.button("トピック追加", disabled=len(st.session_state.user_defined_topics) >= 8):
+                        st.session_state.user_defined_topics.append("")
+                        st.rerun()
+                    
+                    # 空でないトピックのみを取得
+                    user_topics = [topic.strip() for topic in st.session_state.user_defined_topics if topic.strip()]
+                    
+                    if user_topics:
+                        st.success(f"定義されたトピック: {len(user_topics)}個")
+                        for i, topic in enumerate(user_topics, 1):
+                            st.write(f"{i}. {topic}")
+                    else:
+                        st.warning("少なくとも1つのトピックを入力してください")
+
                 # パラメータ設定
+                st.subheader("分析パラメータ")
                 col1, col2 = st.columns(2)
                 with col1:
-                    auto_topics = st.checkbox("トピック数を自動決定", value=True)
-                    if not auto_topics:
-                        n_topics = st.slider(
-                            "トピック数", min_value=2, max_value=10, value=5
-                        )
+                    if extraction_method == "完全自動":
+                        auto_topics = st.checkbox("トピック数を自動決定", value=True)
+                        if not auto_topics:
+                            n_topics = st.slider(
+                                "トピック数", min_value=2, max_value=10, value=5
+                            )
+                        else:
+                            n_topics = None
                     else:
-                        n_topics = None
+                        n_topics = len(user_topics) if user_topics else None
+                        st.info(f"トピック数: {n_topics if n_topics else 0}個（ユーザー定義）")
 
                     auto_subtopics = st.checkbox("サブトピック数を自動決定", value=True)
                     if not auto_subtopics:
@@ -339,6 +396,15 @@ def main():
                         value=len(df),
                     )
 
+                # データ説明の入力
+                st.subheader("データ説明（オプション）")
+                data_description = st.text_area(
+                    "データの説明を入力してください",
+                    placeholder="例: YouTubeの商品レビューコメント。主にスマートフォンに関する顧客の評価や意見が含まれています。",
+                    help="データの内容や背景を説明することで、より適切なトピック抽出が可能になります",
+                    height=80
+                )
+
                 # テキストデータ抽出
                 filtered_texts = (
                     df[text_column].dropna().astype(str).tolist()[:data_limit]
@@ -354,8 +420,11 @@ def main():
 
                 # 分析実行
                 if st.button("LLMトピック抽出実行", type="primary"):
+                    # バリデーション
                     if len(filtered_texts) < 5:
                         st.error("分析には最低5件のデータが必要です")
+                    elif extraction_method == "ユーザー定義トピック" and not user_topics:
+                        st.error("ユーザー定義トピックが入力されていません")
                     else:
                         with st.spinner("LLMによる分析中..."):
                             extractor = LLMTopicExtractor(api_key, selected_model.value)
@@ -364,9 +433,15 @@ def main():
                             st.write("トピック抽出中...")
                             progress_bar = st.progress(0)
 
-                            topics_result = extractor.extract_topics(
-                                filtered_texts, n_topics, n_subtopics
-                            )
+                            # ユーザー定義トピックの場合はuser_topicsを渡す
+                            if extraction_method == "ユーザー定義トピック":
+                                topics_result = extractor.extract_topics_with_predefined(
+                                    filtered_texts, user_topics, n_subtopics, data_description
+                                )
+                            else:
+                                topics_result = extractor.extract_topics(
+                                    filtered_texts, n_topics, n_subtopics, data_description
+                                )
                             progress_bar.progress(50)
 
                             if topics_result:
@@ -375,12 +450,14 @@ def main():
                                 st.session_state["analysis_settings"] = {
                                     "provider": selected_provider.get_display_name(),
                                     "model": selected_model.get_display_name(),
+                                    "extraction_method": extraction_method,
                                     "n_topics": n_topics if n_topics else "自動決定",
                                     "n_subtopics": n_subtopics
                                     if n_subtopics
                                     else "自動決定",
                                     "data_count": len(filtered_texts),
                                     "text_column": text_column,
+                                    "data_description": data_description if data_description.strip() else "なし",
                                 }
                                 st.success("トピック抽出完了")
 
