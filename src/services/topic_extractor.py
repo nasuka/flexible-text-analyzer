@@ -87,7 +87,9 @@ class LLMTopicExtractor:
         )
 
         # ユーザー定義トピックのリスト
-        topics_list = "\n".join([f"{i + 1}. {topic}" for i, topic in enumerate(predefined_topics)])
+        topics_list = "\n".join(
+            [f"{i + 1}. {topic}" for i, topic in enumerate(predefined_topics)]
+        )
 
         # データ説明の追加
         data_context = ""
